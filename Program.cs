@@ -25,11 +25,38 @@ namespace SharpLogix
         }
     }
 
-    class Node
+    class NodeDefinition
     {
-        string nodeType;
-        int nodeId;
+        protected string typename;
+        protected string[] inputs;
+        protected string[] outputs;
+        protected string default_output_name;
 
+    }
+
+    class BinaryOperationNode : NodeDefinition
+    {
+        public BinaryOperationNode(string name)
+        {
+            typename = name;
+            inputs   = new string[] { "A", "B" };
+            outputs = new string[] { "*" };
+            default_output_name = "*";
+        }
+        
+    }
+
+    struct Node
+    {
+        public string typename;
+    }
+    struct NodeRef
+    {
+        int nodeId;
+    }
+    struct NodeRefGroup
+    {
+        List<NodeRef> nodes;
     }
     class ActiveElement
     {
@@ -45,18 +72,54 @@ namespace SharpLogix
 
     class SharpenedSyntaxWalker : CSharpSyntaxWalker
     {
-        Dictionary<string, Node> locals;
-        Dictionary<string, Node> globals;
+        List<Node> nodes;
+        List<List<int>> currentOperationNodes;
+        Dictionary<string, NodeRef> locals;
+        Dictionary<string, NodeRef> globals;
 
         Dictionary<TypeCode, string> literalLogixNodes;
+        Dictionary<SyntaxKind, string> binaryOperationsNodes;
+
+        public int AddNode(string typename, string name)
+        {
+            int newID = nodes.Count;
+            Node node = new Node
+            {
+                typename = typename
+            };
+            nodes.Add(node);
+
+            Emit($"NODE {newID} '{typename}' \"{name}\"");
+
+            if (currentOperationNodes.Count > 0)
+            {
+                 currentOperationNodes[currentOperationNodes.Count-1].Add(newID);
+            }
+                
+            return newID;
+        }
+
+        public void AddToCurrentOperation(int id)
+        {
+            int currentOperandsListIndex = currentOperationNodes.Count - 1;
+            if (currentOperandsListIndex < 0)
+            {
+                return;
+            }
+
+            currentOperationNodes[currentOperandsListIndex].Add(id);
+        }
 
         public SharpenedSyntaxWalker()
         {
-            locals = new Dictionary<string, Node>();
-            globals = new Dictionary<string, Node>();
+            nodes = new List<Node>();
+            locals = new Dictionary<string, NodeRef>();
+            globals = new Dictionary<string, NodeRef>();
+            binaryOperationsNodes = new Dictionary<SyntaxKind, string>();
+            currentOperationNodes = new List<List<int>>();
 
             literalLogixNodes = new Dictionary<TypeCode, string>();
-            literalLogixNodes.Add(TypeCode.Boolean, "BooleaInput");
+            literalLogixNodes.Add(TypeCode.Boolean, "BooleanInput");
             literalLogixNodes.Add(TypeCode.Byte,    "ByteInput");
             literalLogixNodes.Add(TypeCode.SByte,   "SbyteInput");
             literalLogixNodes.Add(TypeCode.Int16,   "ShortInput");
@@ -69,6 +132,12 @@ namespace SharpLogix
             literalLogixNodes.Add(TypeCode.Double,  "DoubleInput");
             literalLogixNodes.Add(TypeCode.Char,    "CharInput");
             literalLogixNodes.Add(TypeCode.String,  "StringInput");
+
+            binaryOperationsNodes.Add(SyntaxKind.AddExpression, "AddOperator");
+            binaryOperationsNodes.Add(SyntaxKind.SubtractExpression, "SubtractOperator");
+            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression, "MultiplyOperator");
+            binaryOperationsNodes.Add(SyntaxKind.DivideExpression, "DivideOperator");
+            binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "BitwiseAndOperator");
             
         }
 
@@ -79,18 +148,18 @@ namespace SharpLogix
 
         private int DefineLiteral(Type type, object value)
         {
-            int newID = -1;
-            if (literalLogixNodes.TryGetValue(Type.GetTypeCode(value.GetType()), out string logixInputType))
+            int nodeID = -1;
+            Type valueType = value.GetType();
+            if (literalLogixNodes.TryGetValue(Type.GetTypeCode(valueType), out string logixInputType))
             {
-                newID = IDGenerator.NewID();
-                Emit($"NODE {newID} {logixInputType}");
-                Emit($"SETCONST {newID} {value}");
+                nodeID = AddNode(logixInputType, $"Literal {valueType.Name}");
+                Emit($"SETCONST {nodeID} {value}");
             }
             else
             {
-                Console.WriteLine($"Cannot handle literals of type {type} yet");
+                Console.WriteLine($"Cannot {type} literals yet");
             }
-            return newID;
+            return nodeID;
         }
 
         int tabs = 0;
@@ -128,7 +197,25 @@ namespace SharpLogix
         public override void VisitBinaryExpression(BinaryExpressionSyntax node)
         {
             Console.WriteLine($"Binary expression of type : {node.Kind()}");
-            base.VisitBinaryExpression(node);
+            if (binaryOperationsNodes.TryGetValue(node.Kind(), out string logixBinaryOperatorType))
+            {
+                int listIndex = currentOperationNodes.Count;
+                currentOperationNodes.Add(new List<int>(2));
+                base.VisitBinaryExpression(node);
+                List<int> operands = currentOperationNodes[listIndex];
+                if (operands.Count < 2)
+                {
+                    Console.Error.WriteLine("Could not convert the operands :C");
+                    return;
+                }
+
+                int nodeID = AddNode(logixBinaryOperatorType, node.Kind().ToString());
+                /* FIXME Get the right Output name ! */
+                Emit($"INPUT {nodeID} 'A' {operands[0]} '*'");
+                Emit($"INPUT {nodeID} 'B' {operands[1]} '*'");
+                
+            }
+                
         }
 
         public override void VisitLiteralExpression(LiteralExpressionSyntax node)
@@ -258,7 +345,7 @@ namespace SharpLogix
             SyntaxTree tree = CSharpSyntaxTree.ParseText(@"
                 public int WonderfulMethod(int a, int b)
                 {
-                    int c = a + b;
+                    int c = 3 + 5;
                     c += 1;
                     c = Math.Max(15, c);
                     return c;
