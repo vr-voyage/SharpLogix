@@ -9,21 +9,15 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Text;
 using System.Threading.Tasks;
 
 namespace SharpLogix
 {
 
-    public class IDGenerator
-    {
-        public static int id = 0;
-        public static int NewID()
-        {
-            id++;
-            return id;
-        }
-    }
+    
+
 
     class NodeDefinition
     {
@@ -52,7 +46,7 @@ namespace SharpLogix
     }
     struct NodeRef
     {
-        int nodeId;
+        public int nodeId;
     }
     struct NodeRefGroup
     {
@@ -70,15 +64,60 @@ namespace SharpLogix
     //
     // AssignmentOperation - NodeGroup. 0 Inputs. 1 Output (NodeGroup ID). DefaultOutputName = ??
 
+    class OperationNodes : List<int> { }
+
     class SharpenedSyntaxWalker : CSharpSyntaxWalker
     {
+
         List<Node> nodes;
-        List<List<int>> currentOperationNodes;
+        List<string> script;
+        
+        List<OperationNodes> currentOperationNodes;
         Dictionary<string, NodeRef> locals;
         Dictionary<string, NodeRef> globals;
 
         Dictionary<TypeCode, string> literalLogixNodes;
         Dictionary<SyntaxKind, string> binaryOperationsNodes;
+
+        public static string Base64Encode(string plainText)
+        {
+            var plainTextBytes = System.Text.Encoding.UTF8.GetBytes(plainText);
+            return System.Convert.ToBase64String(plainTextBytes);
+        }
+
+        public SharpenedSyntaxWalker()
+        {
+            nodes = new List<Node>();
+            locals = new Dictionary<string, NodeRef>();
+            globals = new Dictionary<string, NodeRef>();
+            binaryOperationsNodes = new Dictionary<SyntaxKind, string>();
+            currentOperationNodes = new List<OperationNodes>();
+
+            literalLogixNodes = new Dictionary<TypeCode, string>();
+            literalLogixNodes.Add(TypeCode.Boolean, "BoolInput");
+            literalLogixNodes.Add(TypeCode.Byte, "ByteInput");
+            literalLogixNodes.Add(TypeCode.SByte, "SbyteInput");
+            literalLogixNodes.Add(TypeCode.Int16, "ShortInput");
+            literalLogixNodes.Add(TypeCode.UInt16, "UshortInput");
+            literalLogixNodes.Add(TypeCode.Int32, "IntInput");
+            literalLogixNodes.Add(TypeCode.UInt32, "UintInput");
+            literalLogixNodes.Add(TypeCode.Int64, "LongInput");
+            literalLogixNodes.Add(TypeCode.UInt64, "UlongInput");
+            literalLogixNodes.Add(TypeCode.Single, "FloatInput");
+            literalLogixNodes.Add(TypeCode.Double, "DoubleInput");
+            literalLogixNodes.Add(TypeCode.Char, "CharInput");
+            literalLogixNodes.Add(TypeCode.String, "StringInput");
+
+            binaryOperationsNodes.Add(SyntaxKind.AddExpression, "Add_Int");
+            binaryOperationsNodes.Add(SyntaxKind.SubtractExpression, "Sub_Int");
+            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression, "Mul_Int");
+            binaryOperationsNodes.Add(SyntaxKind.DivideExpression, "Div_Int");
+            binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "AND_Bool");
+
+            script = new List<string>(512);
+            string programTitle = Base64Encode("Test program");
+            Emit($"PROGRAM \"{programTitle}\"");
+        }
 
         public int AddNode(string typename, string name)
         {
@@ -89,7 +128,7 @@ namespace SharpLogix
             };
             nodes.Add(node);
 
-            Emit($"NODE {newID} '{typename}' \"{name}\"");
+            Emit($"NODE {newID} '{typename}' \"{Base64Encode($"Node {newID} {name}")}\"");
 
             if (currentOperationNodes.Count > 0)
             {
@@ -110,40 +149,52 @@ namespace SharpLogix
             currentOperationNodes[currentOperandsListIndex].Add(id);
         }
 
-        public SharpenedSyntaxWalker()
+        int CollectionPush()
         {
-            nodes = new List<Node>();
-            locals = new Dictionary<string, NodeRef>();
-            globals = new Dictionary<string, NodeRef>();
-            binaryOperationsNodes = new Dictionary<SyntaxKind, string>();
-            currentOperationNodes = new List<List<int>>();
-
-            literalLogixNodes = new Dictionary<TypeCode, string>();
-            literalLogixNodes.Add(TypeCode.Boolean, "BooleanInput");
-            literalLogixNodes.Add(TypeCode.Byte,    "ByteInput");
-            literalLogixNodes.Add(TypeCode.SByte,   "SbyteInput");
-            literalLogixNodes.Add(TypeCode.Int16,   "ShortInput");
-            literalLogixNodes.Add(TypeCode.UInt16,  "UshortInput");
-            literalLogixNodes.Add(TypeCode.Int32,   "IntInput");
-            literalLogixNodes.Add(TypeCode.UInt32,  "UintInput");
-            literalLogixNodes.Add(TypeCode.Int64,   "LongInput");
-            literalLogixNodes.Add(TypeCode.UInt64,  "UlongInput");
-            literalLogixNodes.Add(TypeCode.Single,  "FloatInput");
-            literalLogixNodes.Add(TypeCode.Double,  "DoubleInput");
-            literalLogixNodes.Add(TypeCode.Char,    "CharInput");
-            literalLogixNodes.Add(TypeCode.String,  "StringInput");
-
-            binaryOperationsNodes.Add(SyntaxKind.AddExpression, "AddOperator");
-            binaryOperationsNodes.Add(SyntaxKind.SubtractExpression, "SubtractOperator");
-            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression, "MultiplyOperator");
-            binaryOperationsNodes.Add(SyntaxKind.DivideExpression, "DivideOperator");
-            binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "BitwiseAndOperator");
-            
+            int collectionIndex = currentOperationNodes.Count;
+            currentOperationNodes.Add(new OperationNodes());
+            return collectionIndex;
         }
+
+        OperationNodes invalidCollection = new OperationNodes();
+
+        OperationNodes CollectionGetLast()
+        {
+            OperationNodes collection = invalidCollection;
+            if (currentOperationNodes.Count > 0)
+                collection = currentOperationNodes[currentOperationNodes.Count - 1];
+            return collection;
+        }
+
+        OperationNodes CollectionPop()
+        {
+            OperationNodes poppedCollection = invalidCollection;
+            int nCollections = currentOperationNodes.Count;
+            if (nCollections > 0)
+            {
+                poppedCollection = CollectionGetLast();
+                currentOperationNodes.RemoveAt(nCollections - 1);
+            }
+
+            return poppedCollection;
+        }
+
+        bool CollectionIsValid(OperationNodes collection)
+        {
+            return collection != invalidCollection;
+        }
+
+
 
         private void Emit(string scriptLine)
         {
-            Console.WriteLine(scriptLine);
+            script.Add(scriptLine);
+            //Console.WriteLine(scriptLine);
+        }
+
+        public string GetScript()
+        {
+            return String.Join("\n", script);
         }
 
         private int DefineLiteral(Type type, object value)
@@ -152,8 +203,9 @@ namespace SharpLogix
             Type valueType = value.GetType();
             if (literalLogixNodes.TryGetValue(Type.GetTypeCode(valueType), out string logixInputType))
             {
-                nodeID = AddNode(logixInputType, $"Literal {valueType.Name}");
-                Emit($"SETCONST {nodeID} {value}");
+                string logixType = "FrooxEngine.LogiX.Input." + logixInputType;
+                nodeID = AddNode(logixType, $"Literal {valueType.Name}");
+                Emit($"SETCONST {nodeID} \"{Base64Encode(value.ToString())}\"");
             }
             else
             {
@@ -174,6 +226,17 @@ namespace SharpLogix
             tabs--;
         }
 
+        public override void VisitIdentifierName(IdentifierNameSyntax node)
+        {
+            string identifierName = node.Identifier.ToString();
+            /* FIXME : Search in every variable category */
+            if (locals.ContainsKey(identifierName))
+            {
+                AddToCurrentOperation(locals[identifierName].nodeId);
+            }
+            base.VisitIdentifierName(node);
+        }
+
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
             Console.WriteLine($"METHOD {node.Identifier} {node.ReturnType}");
@@ -189,9 +252,16 @@ namespace SharpLogix
         public override void VisitVariableDeclarator(VariableDeclaratorSyntax node)
         {
             Console.WriteLine($"Declaring a new variable named : {node.Identifier}");
+            CollectionPush();
             base.VisitVariableDeclarator(node);
-            Console.WriteLine($"VAR {node.Identifier} {node.Initializer}");
-            
+            OperationNodes logixNodes = CollectionPop();
+            int nodeID = logixNodes[logixNodes.Count - 1];
+            NodeRef nodeRef = new NodeRef();
+            nodeRef.nodeId = nodeID;
+            locals.Add(node.Identifier.ToString(), nodeRef);
+            Console.WriteLine($"VAR {node.Identifier} {nodeID}");
+
+
         }
 
         public override void VisitBinaryExpression(BinaryExpressionSyntax node)
@@ -200,7 +270,7 @@ namespace SharpLogix
             if (binaryOperationsNodes.TryGetValue(node.Kind(), out string logixBinaryOperatorType))
             {
                 int listIndex = currentOperationNodes.Count;
-                currentOperationNodes.Add(new List<int>(2));
+                currentOperationNodes.Add(new OperationNodes());
                 base.VisitBinaryExpression(node);
                 List<int> operands = currentOperationNodes[listIndex];
                 if (operands.Count < 2)
@@ -209,7 +279,8 @@ namespace SharpLogix
                     return;
                 }
 
-                int nodeID = AddNode(logixBinaryOperatorType, node.Kind().ToString());
+                string logixType = "FrooxEngine.LogiX.Operators." + logixBinaryOperatorType;
+                int nodeID = AddNode(logixType, node.Kind().ToString());
                 /* FIXME Get the right Output name ! */
                 Emit($"INPUT {nodeID} 'A' {operands[0]} '*'");
                 Emit($"INPUT {nodeID} 'B' {operands[1]} '*'");
@@ -224,49 +295,48 @@ namespace SharpLogix
             {
                 object val = node.Token.Value;
                 DefineLiteral(val.GetType(), val);
-                /*string frooxInputType = "";
-                switch(Type.GetTypeCode(node.Token.Value.GetType()))
-                {
-                    case TypeCode.Int32:
-                        frooxInputType = "IntInput";
-                        break;
-                    case TypeCode.Single:
-                        frooxInputType = "FloatInput";
-                        break;
-                    case TypeCode.Double:
-                        frooxInputType = "DoubleInput";
-                        break;
-                    default:
-                        frooxInputType = "";
-                        Console.WriteLine($"Don't know how to handle literal type {node.Token.Value.GetType()} in NeosVR");
-                        break;
-
-                }
-                if (frooxInputType != "")
-                {
-                    Console.WriteLine($"NODE 999 'FrooxEngine.Logix.Input.{frooxInputType}' \"b64name_of_yetanotherliteral\"");
-                    Console.WriteLine($"SETCONST 999 {node.Token.Value}");
-                }*/
-
             }
             else
             {
                 base.VisitLiteralExpression(node);
             }
-
-            
-
         }
 
 
         public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
         {
-            Console.WriteLine($"Assigning to {node.Left} with {node.Kind()} {node.OperatorToken} and {node.Right.GetType()}");
-            switch(node.Kind())
+            Console.WriteLine($"Assigning to {node.Left} {node.Left.Kind()} with {node.Kind()} {node.OperatorToken} and {node.Right.GetType()}");
+            if (node.Left.Kind() != SyntaxKind.IdentifierName)
+            {
+                Console.WriteLine("Don't know how to handle that...");
+                base.VisitAssignmentExpression(node);
+                return;
+            }
+
+            IdentifierNameSyntax left = (IdentifierNameSyntax)node.Left;
+            string leftName = left.Identifier.ToString();
+            CollectionPush();
+            base.VisitAssignmentExpression(node);
+            /* FIXME : Factorize */
+            OperationNodes nodes = CollectionPop();
+            if (nodes.Count() == 0)
+            {
+                Console.WriteLine("Got nothing...");
+                return;
+            }
+            int lastID = nodes[nodes.Count - 1];
+
+            switch (node.Kind())
             {
                 case SyntaxKind.SimpleAssignmentExpression:
                     {
-                        
+                        if (locals.ContainsKey(leftName))
+                        {
+                            NodeRef nodeRef = locals[leftName];
+                            nodeRef.nodeId = lastID;
+                            locals[leftName] = nodeRef;
+                            Console.WriteLine($"VAR {leftName} = {lastID}");
+                        }
                     }
                     break;
                 case SyntaxKind.AddAssignmentExpression:
@@ -324,7 +394,7 @@ namespace SharpLogix
 
 
             }
-            base.VisitAssignmentExpression(node);
+            
         }
 
         
@@ -337,8 +407,11 @@ namespace SharpLogix
         }
     }
 
+
+
     class Program
     {
+
         static async Task Main(string[] args)
         {
             Console.WriteLine("Meow IS NOT Pouip");
@@ -346,13 +419,17 @@ namespace SharpLogix
                 public int WonderfulMethod(int a, int b)
                 {
                     int c = 3 + 5;
-                    c += 1;
-                    c = Math.Max(15, c);
+                    c = c + 1;
+                    c = c * 2;
                     return c;
                 }
             ");
             var walker = new SharpenedSyntaxWalker();
             walker.Visit(tree.GetRoot());
+
+            string script = walker.GetScript();
+            Console.WriteLine(script);
+
         }
     }
 }
