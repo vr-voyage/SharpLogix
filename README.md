@@ -2,7 +2,7 @@
 
 An attempt at converting C# to Logix
 
-![The generated script is sent manually](https://raw.githubusercontent.com/vr-voyage/SharpLogix/screenshots/First-working-manual-attempt.png)
+![The generated script is sent manually](https://raw.githubusercontent.com/vr-voyage/SharpLogix/main/screenshots/First-working-manual-attempt.png)
 
 # Currently status
 
