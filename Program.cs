@@ -16,9 +16,6 @@ using System.Threading.Tasks;
 namespace SharpLogix
 {
 
-    
-
-
     class NodeDefinition
     {
         protected string typename;
@@ -71,7 +68,8 @@ namespace SharpLogix
 
         List<Node> nodes;
         List<string> script;
-        
+        System.Numerics.Vector2 nodePosition;
+
         List<OperationNodes> currentOperationNodes;
         Dictionary<string, NodeRef> locals;
         Dictionary<string, NodeRef> globals;
@@ -108,15 +106,41 @@ namespace SharpLogix
             literalLogixNodes.Add(TypeCode.Char, "CharInput");
             literalLogixNodes.Add(TypeCode.String, "StringInput");
 
-            binaryOperationsNodes.Add(SyntaxKind.AddExpression, "Add_Int");
-            binaryOperationsNodes.Add(SyntaxKind.SubtractExpression, "Sub_Int");
-            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression, "Mul_Int");
-            binaryOperationsNodes.Add(SyntaxKind.DivideExpression, "Div_Int");
+            binaryOperationsNodes.Add(SyntaxKind.AddExpression,        "Add_Int");
+            binaryOperationsNodes.Add(SyntaxKind.SubtractExpression,   "Sub_Int");
+            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression,   "Mul_Int");
+            binaryOperationsNodes.Add(SyntaxKind.DivideExpression,     "Div_Int");
             binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "AND_Bool");
 
             script = new List<string>(512);
             string programTitle = Base64Encode("Test program");
-            Emit($"PROGRAM \"{programTitle}\"");
+            Emit($"PROGRAM \"{programTitle}\" 2");
+
+            nodePosition.X = 0;
+            nodePosition.Y = 0;
+        }
+
+        public void PositionNextBottom()
+        {
+            nodePosition.Y += 75;
+        }
+
+        public void PositionNextForward()
+        {
+            nodePosition.X += 150;
+            nodePosition.Y = 0;
+            
+        }
+
+        private void Emit(string scriptLine)
+        {
+            script.Add(scriptLine);
+            //Console.WriteLine(scriptLine);
+        }
+
+        private void EmitPosition(int nodeID)
+        {
+            Emit($"POS {nodeID} {((int)nodePosition.X)} {(int)nodePosition.Y}");
         }
 
         public int AddNode(string typename, string name)
@@ -129,6 +153,8 @@ namespace SharpLogix
             nodes.Add(node);
 
             Emit($"NODE {newID} '{typename}' \"{Base64Encode($"Node {newID} {name}")}\"");
+            EmitPosition(newID);
+            PositionNextBottom();
 
             if (currentOperationNodes.Count > 0)
             {
@@ -186,15 +212,12 @@ namespace SharpLogix
 
 
 
-        private void Emit(string scriptLine)
-        {
-            script.Add(scriptLine);
-            //Console.WriteLine(scriptLine);
-        }
+
+
 
         public string GetScript()
         {
-            return String.Join("\n", script);
+            return String.Join("\n", script) + "\n";
         }
 
         private int DefineLiteral(Type type, object value)
@@ -280,6 +303,8 @@ namespace SharpLogix
                 }
 
                 string logixType = "FrooxEngine.LogiX.Operators." + logixBinaryOperatorType;
+
+                PositionNextForward();
                 int nodeID = AddNode(logixType, node.Kind().ToString());
                 /* FIXME Get the right Output name ! */
                 Emit($"INPUT {nodeID} 'A' {operands[0]} '*'");
@@ -430,6 +455,8 @@ namespace SharpLogix
             string script = walker.GetScript();
             Console.WriteLine(script);
 
+            string homePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            File.WriteAllText(homePath + "/Documents/Neos VR/Sample.lgx", script);
         }
     }
 }
