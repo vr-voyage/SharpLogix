@@ -7,10 +7,12 @@ using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace SharpLogix
@@ -44,6 +46,10 @@ namespace SharpLogix
     struct NodeRef
     {
         public int nodeId;
+        public NodeRef(int id)
+        {
+            nodeId = id;
+        }
     }
     struct NodeRefGroup
     {
@@ -51,8 +57,9 @@ namespace SharpLogix
     }
     class ActiveElement
     {
-        Node node;
+        NodeRef node;
         string defaultOutputName;
+        string selectedOutput;
     };
 
     // NumericLiteral - Int -> IntInput. 0 Inputs. 1 Output. DefaultOutputName = *
@@ -74,6 +81,25 @@ namespace SharpLogix
         Dictionary<string, NodeRef> locals;
         Dictionary<string, NodeRef> globals;
 
+        NodeRef undefined;
+
+        enum IdentifierKind
+        {
+            INVALID,
+            Local,
+            Global,
+            Namespace,
+            Method,
+            Field
+        }
+
+        struct CurrentIdentifierPart {
+            IdentifierKind lastIdentifierKind;
+            string name;
+        }
+
+        List<CurrentIdentifierPart> currentIdentifier;
+
         Dictionary<TypeCode, string> literalLogixNodes;
         Dictionary<SyntaxKind, string> binaryOperationsNodes;
 
@@ -85,6 +111,10 @@ namespace SharpLogix
 
         public SharpenedSyntaxWalker()
         {
+            undefined = new NodeRef
+            {
+                nodeId = -1
+            };
             nodes = new List<Node>();
             locals = new Dictionary<string, NodeRef>();
             globals = new Dictionary<string, NodeRef>();
@@ -108,7 +138,7 @@ namespace SharpLogix
 
             binaryOperationsNodes.Add(SyntaxKind.AddExpression,        "Add_Int");
             binaryOperationsNodes.Add(SyntaxKind.SubtractExpression,   "Sub_Int");
-            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression,   "Mul_Int");
+            binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression,   "Mul_Float");
             binaryOperationsNodes.Add(SyntaxKind.DivideExpression,     "Div_Int");
             binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "AND_Bool");
 
@@ -152,7 +182,7 @@ namespace SharpLogix
             };
             nodes.Add(node);
 
-            Emit($"NODE {newID} '{typename}' \"{Base64Encode($"Node {newID} {name}")}\"");
+            Emit($"NODE {newID} 'FrooxEngine.LogiX.{typename}' \"{Base64Encode($"Node {newID} {name}")}\"");
             EmitPosition(newID);
             PositionNextBottom();
 
@@ -226,7 +256,12 @@ namespace SharpLogix
             Type valueType = value.GetType();
             if (literalLogixNodes.TryGetValue(Type.GetTypeCode(valueType), out string logixInputType))
             {
-                string logixType = "FrooxEngine.LogiX.Input." + logixInputType;
+                string logixType = "Input." + logixInputType;
+                string valueContent = value.ToString();
+                /*if (logixInputType == "FloatInput")
+                {
+                    valueContent = valueContent.TrimEnd(new char[] { ' ', 'f' });
+                }*/
                 nodeID = AddNode(logixType, $"Literal {valueType.Name}");
                 Emit($"SETCONST {nodeID} \"{Base64Encode(value.ToString())}\"");
             }
@@ -262,6 +297,7 @@ namespace SharpLogix
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
+            PositionNextForward();
             Console.WriteLine($"METHOD {node.Identifier} {node.ReturnType}");
             var parameters = node.ParameterList.Parameters;
             for (int i = 0; i < parameters.Count; i++)
@@ -275,14 +311,74 @@ namespace SharpLogix
         public override void VisitVariableDeclarator(VariableDeclaratorSyntax node)
         {
             Console.WriteLine($"Declaring a new variable named : {node.Identifier}");
+            string varName = node.Identifier.ToString();
+
+            locals.Add(varName, undefined);
+            /* Undefined variable... We'll catch up at the definition */
+            if (node.Initializer == null) return;
+
             CollectionPush();
             base.VisitVariableDeclarator(node);
             OperationNodes logixNodes = CollectionPop();
+
             int nodeID = logixNodes[logixNodes.Count - 1];
             NodeRef nodeRef = new NodeRef();
             nodeRef.nodeId = nodeID;
-            locals.Add(node.Identifier.ToString(), nodeRef);
+            locals[varName] = nodeRef;
             Console.WriteLine($"VAR {node.Identifier} {nodeID}");
+
+
+        }
+
+
+        public override void VisitInvocationExpression(InvocationExpressionSyntax node)
+        {
+            /* FIXME : This is just a quick hack for demonstration purposes.
+             * Find a real design...
+             */
+            string nodeClass;
+            string[] inputs;
+            string functionName = node.Expression.ToString();
+            switch (functionName)
+            {
+                case "Color.FromHSV":
+                    {
+                        nodeClass = "Color.HSV_ToColor";
+                        inputs = new string[] { "H", "S", "V" };
+
+                    }
+                    break;
+                case "Time.CurrentTime":
+                    {
+                        nodeClass = "Input.TimeNode";
+                        inputs = new string[0];
+                    }
+                    break;
+                default:
+                    Console.Error.WriteLine($"Unsupported function {functionName}");
+                    return;
+            }
+
+            CollectionPush();
+            base.VisitInvocationExpression(node);
+            OperationNodes nodes = CollectionPop();
+
+            PositionNextForward();
+            int functionNodeID = AddNode(nodeClass, functionName);
+
+            if (nodes.Count < inputs.Length)
+            {
+                Console.Error.WriteLine($"Not enough arguments for function {functionName}");
+            }
+
+            for (int i = 0; i < inputs.Length; i++)
+            {
+                string inputName = inputs[i];
+                int argumentNodeID = nodes[i];
+                /* FIXME Don't expect the node default output to be '*' */
+                string outputName = "*";
+                Emit($"INPUT {functionNodeID} '{inputName}' {argumentNodeID} '{outputName}'");
+            }
 
 
         }
@@ -302,7 +398,7 @@ namespace SharpLogix
                     return;
                 }
 
-                string logixType = "FrooxEngine.LogiX.Operators." + logixBinaryOperatorType;
+                string logixType = "Operators." + logixBinaryOperatorType;
 
                 PositionNextForward();
                 int nodeID = AddNode(logixType, node.Kind().ToString());
@@ -422,7 +518,47 @@ namespace SharpLogix
             
         }
 
-        
+        public static string NeosValuesArrayString(params string[] values)
+        {
+            return $"[{String.Join(";", values)}]";
+        }
+
+        public override void VisitParameter(ParameterSyntax node)
+        {
+            string nodeType = node.Type.ToString();
+            if (nodeType == "float")
+            {
+                /* FIXME : Try dynamic variables */
+                string paramName = node.Identifier.ToString();
+                int nodeID = AddNode("Data.ValueRegister<System.Single>", $"Parameter {paramName}");
+                locals.Add(paramName, new NodeRef(nodeID));
+                
+            }
+            base.VisitParameter(node);
+        }
+
+        public override void VisitObjectCreationExpression(ObjectCreationExpressionSyntax node)
+        {
+            if (node.Type.ToString() == "Color")
+            {
+                int nodeID = AddNode("Input.ColorTextInput", "new Color");
+                var args = node.ArgumentList.Arguments;
+                string r = args[0].ToString();
+                string g = args[1].ToString();
+                string b = args[2].ToString();
+                string a = args[3].ToString();
+                string color = NeosValuesArrayString(r, g, b, a);
+                Emit($"SETCONST {nodeID} \"{Base64Encode(color)}\"");
+            }
+            else
+            {
+                base.VisitObjectCreationExpression(node);
+            }
+            
+
+
+        }
+
 
         public override void VisitExpressionStatement(ExpressionStatementSyntax node)
         {
@@ -437,16 +573,24 @@ namespace SharpLogix
     class Program
     {
 
+        
+
         static async Task Main(string[] args)
         {
             Console.WriteLine("Meow IS NOT Pouip");
+
+            Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
+
             SyntaxTree tree = CSharpSyntaxTree.ParseText(@"
-                public int WonderfulMethod(int a, int b)
+
+                Color RandomColor(float currentTime)
                 {
-                    int c = 3 + 5;
-                    c = c + 1;
-                    c = c * 2;
-                    return c;
+                    return Color.FromHSV(currentTime, 1.0f, 1.0f);
+                }
+                public void WonderfulMethod(float speed)
+                {
+                    float time = Time.CurrentTime() * speed;
+                    RandomColor(time);
                 }
             ");
             var walker = new SharpenedSyntaxWalker();
@@ -457,6 +601,7 @@ namespace SharpLogix
 
             string homePath = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
             File.WriteAllText(homePath + "/Documents/Neos VR/Sample.lgx", script);
+            
         }
     }
 }
