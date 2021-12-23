@@ -11,6 +11,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
+using System.Numerics;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -160,6 +161,17 @@ namespace SharpLogix
     {
         public string name;
         public List<LogixMethodParameter> parameters;
+        public string returnType;
+
+        public bool ReturnValue()
+        {
+            return returnType != "void";
+        }
+
+        public void SetReturnType(string typeName)
+        {
+            returnType = typeName;
+        }
 
         static readonly LogixMethodParameter invalidParam = new LogixMethodParameter("", "", -1);
 
@@ -355,11 +367,20 @@ namespace SharpLogix
             nodePosition.Y += 75;
         }
 
-        public void PositionNextForward()
+        public void PositionNextForward(int forward = 150)
         {
-            nodePosition.X += 150;
+            nodePosition.X += forward;
             nodePosition.Y = 0;
-            
+        }
+
+        public void PositionSet(Vector2 position)
+        {
+            nodePosition = position;
+        }
+
+        public Vector2 PositionGet()
+        {
+            return nodePosition;
         }
 
         private string GetDefaultOutput(int inputNodeID)
@@ -382,7 +403,7 @@ namespace SharpLogix
         {
             if (CurrentImpulseValid())
             {
-                Emit($"IMPULSE {inputNodeID} '{inputName}' FROM {currentImpulseOutputNode} '{currentImpulseOutputName}'");
+                Emit($"IMPULSE {inputNodeID} '{inputName}' {currentImpulseOutputNode} '{currentImpulseOutputName}'");
                 ImpulseNext(inputNodeID, nextImpulseName);
             }
         }
@@ -544,25 +565,27 @@ namespace SharpLogix
         {
             int nodeID = AddNode($"Data.ReadDynamicVariable<{LogixClassName(typeName)}>", nodeName);
             int nodeNameID = DefineLiteral(typeof(string), varName);
-            Connect(nodeID, "Tag", nodeNameID);
+            Connect(nodeID, "VariableName", nodeNameID);
             return nodeID;
         }
 
         private int NodeDynamicVariableWrite(string typeName, string varName, string nodeName)
         {
-            int nodeID = AddNode($"Data.CreateOrWriteDynamicVariable<{LogixClassName(typeName)}>", nodeName);
+            int nodeID = AddNode($"Data.WriteOrCreateDynamicVariable<{LogixClassName(typeName)}>", nodeName);
             int nodeNameID = DefineLiteral(typeof(string), varName);
-            Connect(nodeID, "Tag", nodeNameID);
+            Connect(nodeID, "VariableName", nodeNameID);
             return nodeID;
         }
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
             var methodName = node.Identifier.ToString();
-            methods.Add(methodName, new LogixMethod(methodName));
+            LogixMethod logixMethod = new LogixMethod(methodName);
+            methods.Add(methodName, logixMethod);
             currentMethodName = methodName;
-            
-            PositionNextForward();
+
+            /* FIXME Have another way to deal with the Layout */
+            PositionNextForward(700);
             Console.WriteLine($"METHOD {node.Identifier} {node.ReturnType}");
             var parameters = node.ParameterList.Parameters;
             for (int i = 0; i < parameters.Count; i++)
@@ -571,24 +594,24 @@ namespace SharpLogix
 
                 var methodParam = parameters[i];
                 string methodParamType = methodParam.Type.ToString();
-                if (methodParamType == "float")
-                {
-                    /* FIXME : Try dynamic variables */
-                    string paramName = methodParam.Identifier.ToString();
-                    int nodeID = AddNode("Data.ReadDynamicVariable<System.Single>", $"{paramName}");
-                    locals.Add(paramName, new NodeRef(nodeID));
-                    GetCurrentMethod().AddParameter(paramName, methodParamType, nodeID);
-
-                    int nameID = DefineLiteral(typeof(string), paramName);
-                    Connect(nodeID, "VariableName", nameID);
-                }
+                string paramName = methodParam.Identifier.ToString();
+                int nodeID = NodeDynamicVariableRead(methodParamType, $"{methodName}/{paramName}", "Param : " + paramName);
+                locals.Add(paramName, new NodeRef(nodeID));
+                logixMethod.AddParameter(paramName, methodParamType, nodeID);           
             }
 
+            /* FIXME Have another way to deal with the Layout */
+            if (parameters.Count != 0)
+            {
+                PositionNextForward(300);
+            }
             int methodRunImpulse = AddNode("ProgramFlow.DynamicImpulseReceiver", $"{methodName}");
             int tagName = DefineLiteral(typeof(string), methodName);
             Connect(methodRunImpulse, "Tag", tagName);
 
+
             string returnType = node.ReturnType.ToString();
+            logixMethod.SetReturnType(returnType);
             bool hasReturn = (returnType != "void");
             if (hasReturn)
             {
@@ -663,18 +686,13 @@ namespace SharpLogix
                     Console.Error.WriteLine($"Can't handle parameter of type {nodeType}");
                     return;
                 }
-                string paramCallType = $"Data.WriteDynamicVariable<{typesList[nodeType]}>";
 
-                /* FIXME: BUG: We still need to setup the name of
-                 * the dynamic variable
-                 */
+                Console.WriteLine("Calling user function");
 
-                int paramSetNodeID = AddNode(paramCallType, $"Arg {i} {method.name}.{methodParam.name}");
-
-                int paramNameID = DefineLiteral(typeof(string), $"{method.name}/{methodParam.name}");
-
-                Connect(paramSetNodeID, "VariableName", paramNameID);
+                int paramSetNodeID = NodeDynamicVariableWrite(methodParam.type, $"{method.name}/{methodParam.name}", $"SetArg {methodParam.name}");
                 Connect(paramSetNodeID, "Value", nodeID);
+
+                ConnectImpulse(paramSetNodeID, "WriteOrCreate", "OnWritten");
 
                 int triggerNodeID = AddNode("ProgramFlow.DynamicImpulseTrigger", $"Calling {method.name}");
 
@@ -682,6 +700,12 @@ namespace SharpLogix
                 Connect(triggerNodeID, "Tag", methodNameID);
 
                 ConnectImpulse(triggerNodeID, "Run", "OnTriggered");
+
+                if (method.ReturnValue())
+                {
+                    NodeDynamicVariableRead(method.returnType, $"{method.name}/return", $"Read {method.name} return");
+                }
+                
             }
         }
 
