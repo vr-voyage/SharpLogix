@@ -577,6 +577,11 @@ namespace SharpLogix
             return nodeID;
         }
 
+        void ComponentAdd(string LogixComponentTypeName)
+        {
+            Emit($"COMPONENT S0 '{LogixComponentTypeName}'");
+        }
+
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
             var methodName = node.Identifier.ToString();
