@@ -999,9 +999,6 @@ namespace SharpLogix
             {
                 base.VisitObjectCreationExpression(node);
             }
-            
-
-
         }
 
 
@@ -1018,12 +1015,8 @@ namespace SharpLogix
     class Program
     {
 
-        
-
         static async Task Main(string[] args)
         {
-            Console.WriteLine("Meow IS NOT Pouip");
-
             Thread.CurrentThread.CurrentCulture = System.Globalization.CultureInfo.InvariantCulture;
 
             SyntaxTree tree = CSharpSyntaxTree.ParseText(@"
