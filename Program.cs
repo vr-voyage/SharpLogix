@@ -162,6 +162,7 @@ namespace SharpLogix
         public string name;
         public List<LogixMethodParameter> parameters;
         public string returnType;
+        public int slotID;
 
         public bool ReturnValue()
         {
@@ -175,9 +176,10 @@ namespace SharpLogix
 
         static readonly LogixMethodParameter invalidParam = new LogixMethodParameter("", "", -1);
 
-        public LogixMethod(string methodName)
+        public LogixMethod(string methodName, int newSlotID)
         {
             name = methodName;
+            slotID = newSlotID;
             parameters = new List<LogixMethodParameter>(4);
         }
 
@@ -210,12 +212,39 @@ namespace SharpLogix
         }
     }
 
+    struct LogixSlot
+    {
+        public string name;
+
+        public LogixSlot(string slotName)
+        {
+            name = slotName;
+        }
+    }
+
+    class Slots : List<LogixSlot>
+    {
+        public int AddSlot(string name)
+        {
+            int slotID = Count;
+            Add(new LogixSlot(name));
+            return slotID;
+        }
+
+        public LogixSlot GetSlot(int slotID)
+        {
+            return this[slotID];
+        }
+    }
+
     class SharpenedSyntaxWalker : CSharpSyntaxWalker
     {
 
         readonly NodeDB nodeDB;
 
         readonly Nodes nodes;
+        readonly Slots slots;
+        int currentSlotID = -1;
         readonly List<string> script;
         System.Numerics.Vector2 nodePosition;
 
@@ -273,6 +302,8 @@ namespace SharpLogix
             };
             nodeDB = new NodeDB();
             nodes = new Nodes();
+            slots = new Slots();
+            currentSlotID = slots.AddSlot("ProgramSlot");
             locals = new Dictionary<string, NodeRef>();
             globals = new Dictionary<string, NodeRef>();
             methods = new Dictionary<string, LogixMethod>(32);
@@ -561,31 +592,59 @@ namespace SharpLogix
             return typesList[cSharpTypeName];
         }
 
-        private int NodeDynamicVariableRead(string typeName, string varName, string nodeName)
+        private void ConnectWithSlot(int nodeID, string nodeInputName, int slotID)
+        {
+            Emit($"SETNODESLOT {nodeID} '{nodeInputName}' S{slotID}");
+        }
+
+        /* FIXME Factorize with Write */
+        private int NodeDynamicVariableRead(string typeName, string varName, string nodeName, int slotID)
         {
             int nodeID = AddNode($"Data.ReadDynamicVariable<{LogixClassName(typeName)}>", nodeName);
             int nodeNameID = DefineLiteral(typeof(string), varName);
             Connect(nodeID, "VariableName", nodeNameID);
+
+            string nodeSlotInputName = "Source";
+            if (slotID > -1)
+            {
+                ConnectWithSlot(nodeID, nodeSlotInputName, slotID);
+            }
             return nodeID;
         }
 
-        private int NodeDynamicVariableWrite(string typeName, string varName, string nodeName)
+        private int NodeDynamicVariableWrite(string typeName, string varName, string nodeName, int slotID)
         {
-            int nodeID = AddNode($"Data.WriteOrCreateDynamicVariable<{LogixClassName(typeName)}>", nodeName);
+            int nodeID = AddNode($"Data.WriteDynamicVariable<{LogixClassName(typeName)}>", nodeName);
             int nodeNameID = DefineLiteral(typeof(string), varName);
             Connect(nodeID, "VariableName", nodeNameID);
+
+            string nodeSlotInputName = "Target";
+            if (slotID > -1)
+            {
+                ConnectWithSlot(nodeID, nodeSlotInputName, slotID);
+            }
             return nodeID;
         }
 
-        void ComponentAdd(string LogixComponentTypeName)
+        void VariableDefine(string varName, string varType, int slotID)
         {
-            Emit($"COMPONENT S0 '{LogixComponentTypeName}'");
+            Emit($"VAR S{slotID} \"{Base64Encode(varName)}\" '{LogixClassName(varType)}' ");
+        }
+
+        int SlotAdd(string slotName)
+        {
+            int newSlotID = slots.AddSlot(slotName);
+            Emit($"SLOT S{newSlotID} \"{Base64Encode(slotName)}\"");
+            return newSlotID;
         }
 
         public override void VisitMethodDeclaration(MethodDeclarationSyntax node)
         {
             var methodName = node.Identifier.ToString();
-            LogixMethod logixMethod = new LogixMethod(methodName);
+            int methodSlot = SlotAdd(methodName);
+            currentSlotID = methodSlot;
+
+            LogixMethod logixMethod = new LogixMethod(methodName, methodSlot);
             methods.Add(methodName, logixMethod);
             currentMethodName = methodName;
 
@@ -600,9 +659,12 @@ namespace SharpLogix
                 var methodParam = parameters[i];
                 string methodParamType = methodParam.Type.ToString();
                 string paramName = methodParam.Identifier.ToString();
-                int nodeID = NodeDynamicVariableRead(methodParamType, $"{methodName}/{paramName}", "Param : " + paramName);
+                VariableDefine(paramName, methodParamType, methodSlot);
+                int nodeID = NodeDynamicVariableRead(
+                    methodParamType, paramName,
+                    "Param : " + paramName, methodSlot);
                 locals.Add(paramName, new NodeRef(nodeID));
-                logixMethod.AddParameter(paramName, methodParamType, nodeID);           
+                logixMethod.AddParameter(paramName, methodParamType, nodeID);
             }
 
             /* FIXME Have another way to deal with the Layout */
@@ -620,7 +682,8 @@ namespace SharpLogix
             bool hasReturn = (returnType != "void");
             if (hasReturn)
             {
-                currentReturnID = NodeDynamicVariableWrite(returnType, $"{methodName}/return", $"{methodName} Return");
+                VariableDefine("return", returnType, methodSlot);
+                currentReturnID = NodeDynamicVariableWrite(returnType, "return", $"{methodName} Return", methodSlot);
             }
             else
             {
@@ -641,7 +704,7 @@ namespace SharpLogix
             int returnedValueID = nodes[nodes.Count - 1];
 
             Connect(currentReturnID, "Value", returnedValueID);
-            ConnectImpulse(currentReturnID, "WriteOrCreate", "OnWritten");
+            ConnectImpulse(currentReturnID, "Write", "OnSuccess");
             
         }
 
@@ -694,13 +757,12 @@ namespace SharpLogix
 
                 Console.WriteLine("Calling user function");
 
-                int paramSetNodeID = NodeDynamicVariableWrite(methodParam.type, $"{method.name}/{methodParam.name}", $"SetArg {methodParam.name}");
+                int paramSetNodeID = NodeDynamicVariableWrite(methodParam.type, $"{methodParam.name}", $"SetArg {methodParam.name}", method.slotID);
                 Connect(paramSetNodeID, "Value", nodeID);
 
-                ConnectImpulse(paramSetNodeID, "WriteOrCreate", "OnWritten");
-
+                ConnectImpulse(paramSetNodeID, "Write", "OnSuccess");
                 int triggerNodeID = AddNode("ProgramFlow.DynamicImpulseTrigger", $"Calling {method.name}");
-
+                ConnectWithSlot(triggerNodeID, "TargetHierarchy", method.slotID);
                 int methodNameID = DefineLiteral(typeof(string), method.name);
                 Connect(triggerNodeID, "Tag", methodNameID);
 
@@ -708,7 +770,7 @@ namespace SharpLogix
 
                 if (method.ReturnValue())
                 {
-                    NodeDynamicVariableRead(method.returnType, $"{method.name}/return", $"Read {method.name} return");
+                    NodeDynamicVariableRead(method.returnType, $"return", $"Read {method.name} return", method.slotID);
                 }
                 
             }
