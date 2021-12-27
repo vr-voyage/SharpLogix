@@ -1,11 +1,18 @@
 # About
 
+https://user-images.githubusercontent.com/84687350/147426602-d9b5d906-4318-4b63-9c06-0e688954f399.mp4
+
 An attempt at converting C# to Logix
 
 ![The generated script is sent manually](https://raw.githubusercontent.com/vr-voyage/SharpLogix/main/screenshots/First-working-manual-attempt.png)
 
 A special branch of my NeosVR Plugin is required :
 https://github.com/vr-voyage/voyage-neosvr-plugin/tree/SharpLogix
+
+Also, a WebSocket server able to send the content
+of the generated files is required, at the moment.  
+I'm using my WebSocket Relay Server written with Godot
+https://github.com/vr-voyage/websocket-relay-server
 
 # Current status
 
@@ -27,7 +34,7 @@ special mechanisms).
 
 - [ ]
   Make a simple UI where the script to convert can be
-  copy-pasted.
+  copy-pasted. Add the WebSocket server to it.
 - [ ] 
   Handle basic flow control mechanisms
   (if/else and for loops)
