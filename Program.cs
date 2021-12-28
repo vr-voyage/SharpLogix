@@ -333,6 +333,11 @@ namespace SharpLogix
             nodeDB.AddBinaryOperationDefinition("Operators.Div_Int");
             nodeDB.AddBinaryOperationDefinition("Operators.Sub_Float");
             nodeDB.AddBinaryOperationDefinition("Operators.Sub_Int");
+            nodeDB.AddBinaryOperationDefinition("Operators.GreaterThan_Float");
+            nodeDB.AddBinaryOperationDefinition("Operators.GreaterOrEqual_Float");
+            nodeDB.AddBinaryOperationDefinition("Operators.Equals_Float");
+            nodeDB.AddBinaryOperationDefinition("Operators.LessThan_Float");
+
             nodeDB.AddDefinition(
                 "Data.ReadDynamicVariable", "Value",
                 new string[] { "Source", "VariableName" },
@@ -362,11 +367,21 @@ namespace SharpLogix
             literalLogixNodes.Add(TypeCode.Char, "CharInput");
             literalLogixNodes.Add(TypeCode.String, "StringInput");
 
+            /* FIXME : Autodetect the type. Try automatic coercion if possible. */
             binaryOperationsNodes.Add(SyntaxKind.AddExpression,        "Add_Int");
             binaryOperationsNodes.Add(SyntaxKind.SubtractExpression,   "Sub_Int");
             binaryOperationsNodes.Add(SyntaxKind.MultiplyExpression,   "Mul_Float");
             binaryOperationsNodes.Add(SyntaxKind.DivideExpression,     "Div_Int");
             binaryOperationsNodes.Add(SyntaxKind.BitwiseAndExpression, "AND_Bool");
+
+            binaryOperationsNodes.Add(SyntaxKind.GreaterThanExpression, "GreaterThan_Float");
+            binaryOperationsNodes.Add(SyntaxKind.GreaterThanOrEqualExpression, "GreaterOrEqual_Float");
+            binaryOperationsNodes.Add(SyntaxKind.EqualsExpression, "Equals_Float");
+            binaryOperationsNodes.Add(SyntaxKind.LessThanExpression, "LessThan_Float");
+            /* And you might wonder where the LesserThanExpression expression went ?
+             * WELL, it's not directly supported in LogiX.
+             * So we'll have to hack around with "NOT GREATER_THAN"
+             */
 
             typesList = new Dictionary<string, string>(16);
             typesList.Add("byte",   typeof(byte).FullName);
@@ -876,7 +891,41 @@ namespace SharpLogix
             }
         }
 
+        public override void VisitIfStatement(IfStatementSyntax node)
+        {
+            /* TODO
+             * - Add a Sequence
+             * - Flow from the Sequence after the If statement
+             * This requires support for Inputs lists, so this will
+             * require some tests on the plugin side...
+             */
+            CollectionPush();
+            base.Visit(node.Condition);
+            OperationNodes nodes = CollectionPop();
 
+            if (nodes.Count == 0)
+            {
+                Console.Error.WriteLine("Could not parse IF condition...");
+                return;
+            }
+
+            /* FIXME: Wishful thinking. Nothing guarantees that. */
+            int boolNodeID = nodes[nodes.Count - 1];
+            int ifNodeID = AddNode("ProgramFlow.IfNode", "IF Statement");
+
+            Connect(ifNodeID, "Condition", boolNodeID);
+            ConnectImpulse(ifNodeID, "Run", "True");
+
+            base.Visit(node.Statement);
+
+            if (node.Else != null)
+            {
+                ImpulseNext(currentImpulseOutputNode, "False");
+                base.Visit(node.Else);
+            }
+            Console.WriteLine($"IF CONDITION : {node.Condition} THEN : {node.Statement} ELSE : {node.Else}");
+            //base.VisitIfStatement(node);
+        }
         public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
         {
             Console.WriteLine($"Assigning to {node.Left} {node.Left.Kind()} with {node.Kind()} {node.OperatorToken} and {node.Right.GetType()}");
@@ -1027,8 +1076,12 @@ namespace SharpLogix
                 }
                 public void WonderfulMethod(float speed)
                 {
-
                     float time = Time.CurrentTime() * speed;
+                    if (speed == 0.0f)
+                    {
+                        time = 1.0f;
+                    }
+                    
                     RandomColor(time);
                 }
             ");
