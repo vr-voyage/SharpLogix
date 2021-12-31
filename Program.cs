@@ -899,6 +899,7 @@ namespace SharpLogix
              * This requires support for Inputs lists, so this will
              * require some tests on the plugin side...
              */
+
             CollectionPush();
             base.Visit(node.Condition);
             OperationNodes nodes = CollectionPop();
@@ -909,7 +910,18 @@ namespace SharpLogix
                 return;
             }
 
-            /* FIXME: Wishful thinking. Nothing guarantees that. */
+
+            int sequenceNodeID = AddNode("ProgramFlow.SequenceImpulse", "Branching");
+            /* I purposedly do not encode the end bracket in the
+             * sequence, since this just add extra parsing
+             * for no reasons.
+             * This might be replaced by a comma, to avoid triggering
+             * people OCD (and make parsing easier)
+             */
+            ConnectImpulse(sequenceNodeID, "Trigger", "Sequence[0");
+
+            /* FIXME: Wishful thinking. Nothing guarantees that the last node
+             * is returning a boolean. */
             int boolNodeID = nodes[nodes.Count - 1];
             int ifNodeID = AddNode("ProgramFlow.IfNode", "IF Statement");
 
@@ -924,6 +936,8 @@ namespace SharpLogix
                 base.Visit(node.Else);
             }
             Console.WriteLine($"IF CONDITION : {node.Condition} THEN : {node.Statement} ELSE : {node.Else}");
+
+            ImpulseNext(sequenceNodeID, "Sequence[1");
             //base.VisitIfStatement(node);
         }
         public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
