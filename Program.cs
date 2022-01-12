@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 namespace SharpLogix
 {
 
-    class NodeDefinition
+    /*class NodeDefinition
     {
         protected string typename;
         protected string[] inputs;
@@ -38,72 +38,111 @@ namespace SharpLogix
             default_output_name = "*";
         }
         
+    }*/
+
+    struct NodeTypedConnector
+    {
+        public string name;
+        public string logixType;
+
+        public NodeTypedConnector(string name, string logixType)
+        {
+            this.name = name;
+            this.logixType = logixType;
+        }
     }
 
     struct NodeInfo
     {
         public string className;
-        public string defaultOutput;
-        public string[] inputs;
-        public string[] outputs;
+        public int defaultOutputIndex;
+        public NodeTypedConnector[] inputs;
+        public NodeTypedConnector[] outputs;
+        public string[] methods;
+        public string[] impulses;
 
         public static NodeInfo Define(
             string cName,
-            string output,
-            string[] nodeInputs,
-            string[] nodeOutputs)
+            NodeTypedConnector[] nodeInputs,
+            NodeTypedConnector[] nodeOutputs,
+            int outputIndex)
         {
             return new NodeInfo
             {
                 className = cName,
-                defaultOutput = output,
+                defaultOutputIndex = outputIndex,
                 inputs = nodeInputs,
-                outputs = nodeOutputs
+                outputs = nodeOutputs,
+                /* TODO Add methods and impulses ! */
+                methods = new string[0],
+                impulses = new string[0]
             };
         }
 
-        public static NodeInfo Define(string cName)
+        public string DefaultOutputName()
         {
-            return Define(cName, "*", new string[0], new string[] { "*" });
+            return outputs[defaultOutputIndex].name;
         }
+
+        public string OutputTypeOf(string outputName)
+        {
+            foreach (var nodeConnector in outputs)
+            {
+                if (nodeConnector.name == outputName)
+                {
+                    return nodeConnector.logixType;
+                }
+            }
+            return "INVALID_OUTPUT_" + outputName;
+        }
+ 
     }
 
     class NodeDB : Dictionary<string, NodeInfo>
     {
-        public NodeInfo AddInputDefinition(string name)
+        public NodeInfo AddInputDefinition(string name, string nodeType)
         {
-            string[] inputs = { };
-            string[] outputs = { "*" };
-            return AddDefinition(name, "*", inputs, outputs);
+            NodeTypedConnector[] inputs = { };
+            NodeTypedConnector[] outputs = { new NodeTypedConnector("*", nodeType) };
+            return AddDefinition(name, inputs, outputs, 0);
         }
 
-        public NodeInfo AddBinaryOperationDefinition(string name)
+        public NodeInfo AddBinaryOperationDefinition(string name, string nodeType)
         {
-            string[] inputs = { "A", "B" };
-            string[] outputs = { "*" };
-            return AddDefinition(name, "*", inputs, outputs);
+            NodeTypedConnector[] inputs  = { 
+                new NodeTypedConnector("A", nodeType),
+                new NodeTypedConnector("B", nodeType)
+            };
+            NodeTypedConnector[] outputs = { 
+                new NodeTypedConnector("*", nodeType)
+            };
+            return AddDefinition(name, inputs, outputs, 0);
         }
 
         public NodeInfo AddDefinition(
             string name,
-            string defaultOutputName,
-            string[] inputs,
-            string[] outputs)
+            NodeTypedConnector[] inputs,
+            NodeTypedConnector[] outputs,
+            int defaultOutputIndex)
         {
             string completeName = "FrooxEngine.LogiX." + name;
-            NodeInfo nodeInfo = NodeInfo.Define(
-                completeName, defaultOutputName, inputs, outputs);
+            NodeInfo nodeInfo = NodeInfo.Define(completeName, inputs, outputs, defaultOutputIndex);
             this.Add(completeName, nodeInfo);
             return nodeInfo;
         }
-        public NodeInfo GetNodeInformation(string name)
+        public NodeInfo GetNodeInformation(string nodeName)
         {
-            return this[name];
+            return this[nodeName];
         }
 
-        public string DefaultOutputFor(string name)
+        public string DefaultOutputFor(string nodeName)
         {
-            return this[name].defaultOutput;
+            return this[nodeName].DefaultOutputName();
+        }
+
+        public string OutputTypeOf(string nodeName, string outputName)
+        {
+            return this[nodeName].OutputTypeOf(outputName);
         }
 
     }
@@ -134,6 +173,89 @@ namespace SharpLogix
         string defaultOutputName;
         string selectedOutput;
     };
+
+    struct LogixLocalVariable
+    {
+        public int lastNodeID;
+        public int definitionLevel;
+        public int lastUpdateLevel;
+        public int checkPointFromID;
+        public int checkPointID;
+
+        static public readonly int invalidID = -1;
+
+        public void SetLastNode(int nodeID, int level)
+        {
+            lastNodeID = nodeID;
+            lastUpdateLevel = level;
+            if (level == definitionLevel)
+            {
+                checkPointFromID = lastNodeID;
+            }
+        }
+
+        public bool UpdatedFromLowerLevels()
+        {
+            return lastUpdateLevel != definitionLevel;
+        }
+
+        public void SetCheckPoint(int registerNodeID)
+        {
+            checkPointID = registerNodeID;
+        }
+
+        public void RemoveCheckPoint()
+        {
+            checkPointID = invalidID;
+        }
+
+        public bool CheckpointSet()
+        {
+            return checkPointID != invalidID;
+        }
+    };
+
+    class LogixLocalVariables : Dictionary<string, LogixLocalVariable>
+    {
+        public int level = 0;
+        public static LogixLocalVariable invalidVar = new LogixLocalVariable()
+        {
+            lastNodeID = LogixLocalVariable.invalidID,
+            definitionLevel = LogixLocalVariable.invalidID,
+            lastUpdateLevel = LogixLocalVariable.invalidID,
+            checkPointFromID = LogixLocalVariable.invalidID,
+            checkPointID = LogixLocalVariable.invalidID
+        };
+
+        public LogixLocalVariable AddVariable(string name, int lastNodeID)
+        {
+            LogixLocalVariable localVar = new LogixLocalVariable
+            {
+                lastNodeID = lastNodeID,
+                definitionLevel = level,
+                lastUpdateLevel = level,
+                checkPointFromID = lastNodeID,
+                checkPointID = LogixLocalVariable.invalidID
+            };
+            Add(name, localVar);
+            return localVar;
+        }
+
+        public bool HasIdentifier(string name)
+        {
+            return this.ContainsKey(name);
+        }
+
+        public LogixLocalVariable SetVariable(string name, int lastNodeID, int level)
+        {
+            LogixLocalVariable localVar = invalidVar;
+            if (HasIdentifier(name))
+            {
+                this[name].SetLastNode(lastNodeID, level);
+            }
+            return localVar;
+        }
+    }
 
     // NumericLiteral - Int -> IntInput. 0 Inputs. 1 Output. DefaultOutputName = *
     // StringLiteral  - String -> StringInput. 0 Inputs. 1 Output. DefaultOutputName = *
@@ -249,7 +371,10 @@ namespace SharpLogix
         System.Numerics.Vector2 nodePosition;
 
         List<OperationNodes> currentOperationNodes;
-        readonly Dictionary<string, NodeRef> locals;
+        readonly List<LogixLocalVariables> locals;
+        int currentBlockLevel = 0; // Maybe unused
+        bool localsAlreadyPrepared = false;
+        bool generateCheckpoints = false;
         readonly Dictionary<string, NodeRef> globals;
         readonly Dictionary<string, LogixMethod> methods;
         string currentMethodName = "";
@@ -270,17 +395,10 @@ namespace SharpLogix
             Field
         }
 
-        struct CurrentIdentifierPart {
-            IdentifierKind lastIdentifierKind;
-            string name;
-        }
-
-        List<CurrentIdentifierPart> currentIdentifier;
-
-        Dictionary<TypeCode, string> literalLogixNodes;
-        Dictionary<SyntaxKind, string> binaryOperationsNodes;
+        readonly Dictionary<TypeCode, string> literalLogixNodes;
+        readonly Dictionary<SyntaxKind, string> binaryOperationsNodes;
         /* FIXME : Find a better name */
-        Dictionary<string, string> typesList;
+        readonly Dictionary<string, string> typesList;
 
 
         public static string Base64Encode(string plainText)
@@ -304,44 +422,48 @@ namespace SharpLogix
             nodes = new Nodes();
             slots = new Slots();
             currentSlotID = slots.AddSlot("ProgramSlot");
-            locals = new Dictionary<string, NodeRef>();
+            locals = new List<LogixLocalVariables>(4);
             globals = new Dictionary<string, NodeRef>();
             methods = new Dictionary<string, LogixMethod>(32);
             binaryOperationsNodes = new Dictionary<SyntaxKind, string>();
             currentOperationNodes = new List<OperationNodes>();
 
-            nodeDB.AddInputDefinition("Input.BoolInput");
-            nodeDB.AddInputDefinition("Input.ByteInput");
-            nodeDB.AddInputDefinition("Input.SbyteInput");
-            nodeDB.AddInputDefinition("Input.ShortInput");
-            nodeDB.AddInputDefinition("Input.UshortInput");
-            nodeDB.AddInputDefinition("Input.IntInput");
-            nodeDB.AddInputDefinition("Input.UintInput");
-            nodeDB.AddInputDefinition("Input.LongInput");
-            nodeDB.AddInputDefinition("Input.UlongInput");
-            nodeDB.AddInputDefinition("Input.FloatInput");
-            nodeDB.AddInputDefinition("Input.DoubleInput");
-            nodeDB.AddInputDefinition("Input.CharInput");
-            nodeDB.AddInputDefinition("Input.StringInput");
-            nodeDB.AddInputDefinition("Input.TimeNode");
-            nodeDB.AddInputDefinition("Input.ColorInput");
-            nodeDB.AddBinaryOperationDefinition("Operators.Add_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.Add_Int");
-            nodeDB.AddBinaryOperationDefinition("Operators.Mul_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.Mul_Int");
-            nodeDB.AddBinaryOperationDefinition("Operators.Div_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.Div_Int");
-            nodeDB.AddBinaryOperationDefinition("Operators.Sub_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.Sub_Int");
-            nodeDB.AddBinaryOperationDefinition("Operators.GreaterThan_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.GreaterOrEqual_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.Equals_Float");
-            nodeDB.AddBinaryOperationDefinition("Operators.LessThan_Float");
+            nodeDB.AddInputDefinition("Input.BoolInput",   "System.Boolean");
+            nodeDB.AddInputDefinition("Input.ByteInput",   "System.Byte");
+            nodeDB.AddInputDefinition("Input.SbyteInput",  "System.SByte");
+            nodeDB.AddInputDefinition("Input.ShortInput",  "System.Int16");
+            nodeDB.AddInputDefinition("Input.UshortInput", "System.UInt16");
+            nodeDB.AddInputDefinition("Input.IntInput",    "System.Int32");
+            nodeDB.AddInputDefinition("Input.UintInput",   "System.UInt32");
+            nodeDB.AddInputDefinition("Input.LongInput",   "System.Int64");
+            nodeDB.AddInputDefinition("Input.UlongInput",  "System.UInt64");
+            nodeDB.AddInputDefinition("Input.FloatInput",  "System.Single");
+            nodeDB.AddInputDefinition("Input.DoubleInput", "System.Double");
+            nodeDB.AddInputDefinition("Input.CharInput",   "System.Char");
+            nodeDB.AddInputDefinition("Input.StringInput", "System.String");
+            nodeDB.AddInputDefinition("Input.TimeNode",    "System.DateTime");
+            nodeDB.AddInputDefinition("Input.ColorInput",  "BaseX.color");
+            nodeDB.AddBinaryOperationDefinition("Operators.Add_Float",             "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.Add_Int",               "System.Int32");
+            nodeDB.AddBinaryOperationDefinition("Operators.Mul_Float",             "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.Mul_Int",               "System.Int32");
+            nodeDB.AddBinaryOperationDefinition("Operators.Div_Float",             "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.Div_Int",               "System.Int32");
+            nodeDB.AddBinaryOperationDefinition("Operators.Sub_Float",             "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.Sub_Int",               "System.Int32");
+            nodeDB.AddBinaryOperationDefinition("Operators.GreaterThan_Float",     "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.GreaterOrEqual_Float",  "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.Equals_Float",          "System.Single");
+            nodeDB.AddBinaryOperationDefinition("Operators.LessThan_Float",        "System.Single");
 
             nodeDB.AddDefinition(
-                "Data.ReadDynamicVariable", "Value",
-                new string[] { "Source", "VariableName" },
-                new string[] { "Value", "FoundValue" });
+                "Data.ReadDynamicVariable",
+                new NodeTypedConnector[] { 
+                    new NodeTypedConnector("Source", "`1"),
+                    new NodeTypedConnector("VariableName", "System.String")
+                },
+                new NodeTypedConnector[] { "Value", "FoundValue" },
+                0);
             nodeDB.AddDefinition(
                 "Data.WriteOrCreateDynamicVariable", "",
                 new string[] { "Target", "VariableName", "Value", "CreateDirectlyOnTarget", "CreateNonPersistent" },
@@ -408,6 +530,76 @@ namespace SharpLogix
             nodePosition.Y = 0;
         }
 
+        public LogixLocalVariables LocalsGet()
+        {
+            return locals[locals.Count - 1];
+        }
+
+        public bool LocalVariableValid(LogixLocalVariable localVar)
+        {
+            return localVar.definitionLevel >= 0;
+        }
+
+        public LogixLocalVariables LocalsContainingIdentifier(string identifier)
+        {
+            for (int level = currentBlockLevel; level >= 0; level++)
+            {
+                LogixLocalVariables levelVariables = locals[level];
+                if (levelVariables.HasIdentifier(identifier))
+                {
+                    return levelVariables;
+                }
+            }
+            return null;
+        }
+
+        public LogixLocalVariable LocalsGetVariable(string name)
+        {
+            LogixLocalVariables vars = LocalsContainingIdentifier(name);
+            LogixLocalVariable var = LogixLocalVariables.invalidVar;
+            if (vars != null)
+            {
+                var = vars[name];
+            }
+            return var;
+        }
+
+        public LogixLocalVariables LocalsPush()
+        {
+            currentBlockLevel++;
+            LogixLocalVariables localVars = new LogixLocalVariables
+            {
+                level = locals.Count
+            };
+            locals.Add(localVars);
+            return localVars;
+        }
+
+        public LogixLocalVariables LocalsPop()
+        {
+            currentBlockLevel--;
+            LogixLocalVariables currentLevel = LocalsGet();
+            locals.RemoveAt(locals.Count - 1);
+            return currentLevel;
+        }
+
+        public LogixLocalVariable LocalAdd(string name, int nodeID)
+        {
+            return LocalsGet().AddVariable(name, nodeID);
+        }
+
+        public LogixLocalVariable LocalsSetVar(string name, int nodeID)
+        {
+            LogixLocalVariable localVar = LogixLocalVariables.invalidVar;
+            LogixLocalVariables varsWithName = LocalsContainingIdentifier(name);
+            
+            if (varsWithName != null)
+            {
+                localVar = varsWithName.SetVariable(name, nodeID, currentBlockLevel);
+            }
+            return localVar;
+        }
+
         public void PositionNextBottom()
         {
             nodePosition.Y += 75;
@@ -416,7 +608,7 @@ namespace SharpLogix
         public void PositionNextForward(int forward = 150)
         {
             nodePosition.X += forward;
-            nodePosition.Y = 0;
+            nodePosition.Y  = 0;
         }
 
         public void PositionSet(Vector2 position)
@@ -427,6 +619,13 @@ namespace SharpLogix
         public Vector2 PositionGet()
         {
             return nodePosition;
+        }
+
+        private string NodeOutputType(int nodeID, string outputName)
+        {
+            string nodeType = nodes.GetNode(nodeID).GenericTypeName();
+            
+            nodeDB[nodeType]
         }
 
         private string GetDefaultOutput(int inputNodeID)
@@ -586,13 +785,70 @@ namespace SharpLogix
             tabs--;
         }
 
+        private int RegisterCreateFor(int nodeID, string outputName)
+        {
+            
+            
+            
+        }
+
+        private int LocalCheckpointCreate(LogixLocalVariable localVariable)
+        {
+            int checkpointFromID = localVariable.checkPointFromID;
+            /* FIXME What if we don't want to use the Default output ? */
+            int registerID = RegisterCreateFor(checkpointFromID, GetDefaultOutput(checkpointFromID));
+        }
+
+        private void LocalCheckpointConnectTo(LogixLocalVariable localVariable)
+        {
+            int checkpointID = localVariable.checkPointID;
+            if (localVariable.CheckpointSet() == false)
+            {
+                checkpointID = LocalCheckpointCreate(localVariable);
+            }
+            
+        }
+
+        private void LocalsWriteBackUpdatedBefore(int level)
+        {
+            int upto = Math.Max(0, Math.Min(level, locals.Count - 1));
+            for (int i = 0; i < upto; i++)
+            {
+                foreach (var localVariable in locals[i].Values)
+                {
+                    if (localVariable.UpdatedFromLowerLevels())
+                    {
+                        LocalCheckpointConnectTo(localVariable);
+                    }
+                }
+            }
+        }
+
+        public override void VisitBlock(BlockSyntax node)
+        {
+            
+            /* FIXME : Replace this by "Parameters To Copy"
+             * Or integrate the write back into LocalsPush/Pop ?
+             */
+            if (!localsAlreadyPrepared)
+            {
+                LocalsWriteBackUpdatedInLowerLevels();
+                LogixLocalVariables blockLocalVariables = LocalsPush();
+            }
+            /* FIXME : Check if we need this variable */
+            base.VisitBlock(node);
+            LocalsWriteBackUpdatedInLowerLevels();
+            LocalsPop();
+        }
+
         public override void VisitIdentifierName(IdentifierNameSyntax node)
         {
             string identifierName = node.Identifier.ToString();
             /* FIXME : Search in every variable category */
-            if (locals.ContainsKey(identifierName))
+            var localVar = LocalsGetVariable(identifierName);
+            if (LocalVariableValid(localVar))
             {
-                AddToCurrentOperation(locals[identifierName].nodeId);
+                AddToCurrentOperation(localVar.lastNodeID);
             }
             base.VisitIdentifierName(node);
         }
@@ -678,6 +934,11 @@ namespace SharpLogix
                 int nodeID = NodeDynamicVariableRead(
                     methodParamType, paramName,
                     "Param : " + paramName, methodSlot);
+                /* FIXME
+                 * We need to add locals before visiting the block here.
+                 * But we also need to take care of random blocks defined
+                 * to fragment codes in a function...
+                 */
                 locals.Add(paramName, new NodeRef(nodeID));
                 logixMethod.AddParameter(paramName, methodParamType, nodeID);
             }
