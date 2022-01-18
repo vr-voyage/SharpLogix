@@ -174,16 +174,9 @@ namespace SharpLogix
         string selectedOutput;
     };
 
-    class SharedCheckPointInfo
-    {
-        int fromImpulseID;
-        string fromImpulseName;
 
-        int toImpulseID;
-        string toImpulseName;
-    }
 
-    struct LogixLocalVariable
+    class LogixLocalVariable
     {
         public int lastNodeID;
         public string typeName;
@@ -191,7 +184,6 @@ namespace SharpLogix
         public int lastUpdateLevel;
         public int checkPointFromID;
         public int checkPointID;
-        public SharedCheckPointInfo checkpointInfo;
 
         static public readonly int invalidID = -1;
 
@@ -210,10 +202,9 @@ namespace SharpLogix
             return lastUpdateLevel != definitionLevel;
         }
 
-        public void SetCheckPoint(int registerNodeID, SharedCheckPointInfo sharedInfo)
+        public void SetCheckPoint(int registerNodeID)
         {
             checkPointID = registerNodeID;
-            checkpointInfo = sharedInfo;
         }
 
         public void RemoveCheckPoint()
@@ -237,10 +228,9 @@ namespace SharpLogix
             lastUpdateLevel = LogixLocalVariable.invalidID,
             checkPointFromID = LogixLocalVariable.invalidID,
             checkPointID = LogixLocalVariable.invalidID,
-            checkpointInfo = null
         };
 
-        public LogixLocalVariable AddVariable(string name, int lastNodeID)
+        public LogixLocalVariable AddVariable(string type, string name, int lastNodeID)
         {
             LogixLocalVariable localVar = new LogixLocalVariable
             {
@@ -249,7 +239,7 @@ namespace SharpLogix
                 lastUpdateLevel = level,
                 checkPointFromID = lastNodeID,
                 checkPointID = LogixLocalVariable.invalidID,
-                checkpointInfo = null
+                typeName = type
             };
             Add(name, localVar);
             return localVar;
@@ -262,11 +252,8 @@ namespace SharpLogix
 
         public LogixLocalVariable SetVariable(string name, int lastNodeID, int level)
         {
-            LogixLocalVariable localVar = invalidVar;
-            if (HasIdentifier(name))
-            {
-                this[name].SetLastNode(lastNodeID, level);
-            }
+            var localVar = this[name];
+            localVar.SetLastNode(lastNodeID, level);
             return localVar;
         }
 
@@ -399,7 +386,7 @@ namespace SharpLogix
 
         List<OperationNodes> currentOperationNodes;
         readonly List<LogixLocalVariables> locals;
-        int currentBlockLevel = 0; // Maybe unused
+        int currentBlockLevel;
         bool localsAlreadyPrepared = false;
         bool generateCheckpoints = false;
         readonly Dictionary<string, NodeRef> globals;
@@ -446,15 +433,14 @@ namespace SharpLogix
 
         public SharpenedSyntaxWalker()
         {
-            undefined = new NodeRef
-            {
-                nodeId = -1
-            };
+            
             nodeDB = new NodeDB();
             nodes = new Nodes();
             slots = new Slots();
             currentSlotID = slots.AddSlot("ProgramSlot");
+            currentBlockLevel = 0;
             locals = new List<LogixLocalVariables>(4);
+            LocalsAdd();
             methodParameters = null; /* Initialized when required */
             globals = new Dictionary<string, NodeRef>();
             methods = new Dictionary<string, LogixMethod>(32);
@@ -523,6 +509,13 @@ namespace SharpLogix
                 new NodeTypedConnector[]
                 {
                     new NodeTypedConnector("*", "BaseX.Color")
+                },
+                0);
+            nodeDB.AddDefinition(
+                "Data.ValueRegister",
+                new NodeTypedConnector[] { },
+                new NodeTypedConnector[] { 
+                    new NodeTypedConnector("*", "`1")
                 },
                 0);
 
@@ -595,7 +588,7 @@ namespace SharpLogix
 
         public LogixLocalVariables LocalsContainingIdentifier(string identifier)
         {
-            for (int level = currentBlockLevel; level >= 0; level++)
+            for (int level = currentBlockLevel; level >= 0; level--)
             {
                 LogixLocalVariables levelVariables = locals[level];
                 if (levelVariables.HasIdentifier(identifier))
@@ -609,23 +602,28 @@ namespace SharpLogix
         public LogixLocalVariable LocalsGetVariable(string name)
         {
             LogixLocalVariables vars = LocalsContainingIdentifier(name);
-            LogixLocalVariable var = LogixLocalVariables.invalidVar;
-            if (vars != null)
+            if (vars == null)
             {
-                var = vars[name];
+                Error($"Unknown variable {name}");
             }
-            return var;
+
+            return vars[name];
+        }
+
+        private LogixLocalVariables LocalsAdd()
+        {
+            LogixLocalVariables localVars = new LogixLocalVariables
+            {
+                level = currentBlockLevel
+            };
+            locals.Add(localVars);
+            return localVars;
         }
 
         public LogixLocalVariables LocalsPush()
         {
             currentBlockLevel++;
-            LogixLocalVariables localVars = new LogixLocalVariables
-            {
-                level = locals.Count
-            };
-            locals.Add(localVars);
-            return localVars;
+            return LocalsAdd();
         }
 
         public LogixLocalVariables LocalsPop()
@@ -636,21 +634,20 @@ namespace SharpLogix
             return currentLevel;
         }
 
-        public LogixLocalVariable LocalAdd(string name, int nodeID)
+        public LogixLocalVariable LocalAdd(string type, string name, int nodeID)
         {
-            return LocalsGet().AddVariable(name, nodeID);
+            return LocalsGet().AddVariable(type, name, nodeID);
         }
 
         public LogixLocalVariable LocalsSetVar(string name, int nodeID)
         {
-            LogixLocalVariable localVar = LogixLocalVariables.invalidVar;
             LogixLocalVariables varsWithName = LocalsContainingIdentifier(name);
-            
-            if (varsWithName != null)
+            if (varsWithName == null)
             {
-                localVar = varsWithName.SetVariable(name, nodeID, currentBlockLevel);
+                Error($"Unknown variable {name}");
             }
-            return localVar;
+
+            return varsWithName.SetVariable(name, nodeID, currentBlockLevel);
         }
 
         public void PositionNextBottom()
@@ -778,15 +775,21 @@ namespace SharpLogix
             return collection;
         }
 
+        private void Error(string message)
+        {
+            throw new Exception(message);
+        }
+
         OperationNodes CollectionPop()
         {
-            OperationNodes poppedCollection = invalidCollection;
             int nCollections = currentOperationNodes.Count;
-            if (nCollections > 0)
+            if (nCollections == 0)
             {
-                poppedCollection = CollectionGetLast();
-                currentOperationNodes.RemoveAt(nCollections - 1);
+                Error("Popping more collections than pushed !");
             }
+
+            var poppedCollection = CollectionGetLast();
+            currentOperationNodes.RemoveAt(nCollections - 1);
 
             return poppedCollection;
         }
@@ -817,7 +820,8 @@ namespace SharpLogix
             }
             else
             {
-                Console.WriteLine($"Cannot {type} literals yet");
+                Console.WriteLine($"Cannot handle {type} literals yet");
+                throw new Exception();
             }
             return nodeID;
         }
@@ -832,12 +836,6 @@ namespace SharpLogix
             tabs++;
             base.Visit(node);
             tabs--;
-        }
-
-        public void SequenceNext()
-        {
-            ImpulseNext(currentSequenceID, $"Sequence[{nextSequenceOutput}");
-            nextSequenceOutput++;
         }
 
         /* FIXME
@@ -862,7 +860,7 @@ namespace SharpLogix
             /* We always leave the first output (0) for the checkpoints */
             ConnectLastImpulse(sequencerID, "Trigger", "Sequence[1");
 
-            return currentSequenceID;
+            return sequencerID;
         }
 
 
@@ -877,8 +875,6 @@ namespace SharpLogix
             return WriteTo(registerNodeID, fromValueID, GetDefaultOutput(fromValueID));
         }
 
-
-
         public int WriteTo(int registerNodeID, int fromValueID, string fromOutput)
         {
             int writeNodeID = AddNode("Action.WriteValueNode", "Register write");
@@ -887,10 +883,15 @@ namespace SharpLogix
             return writeNodeID;
         }
 
+        private string LogixType(string cSharpTypeName)
+        {
+            return typesList[cSharpTypeName];
+        }
+
         private int RegisterCreateFor(LogixLocalVariable variable)
         {
             int registerNodeID = AddNode(
-                $"Data.ValueRegister<{variable.typeName}>",
+                $"Data.ValueRegister<{LogixType(variable.typeName)}>",
                 $"Saving {variable.typeName}");
 
             return registerNodeID;
@@ -902,7 +903,9 @@ namespace SharpLogix
             public int currentOutput;
             public int users;
 
-            public static FlowSequence InvalidSequence()
+            public static FlowSequence invalidSequence = InvalidSequence();
+
+            private static FlowSequence InvalidSequence()
             {
                 var sequence = new FlowSequence()
                 {
@@ -970,7 +973,7 @@ namespace SharpLogix
             {
                 while (this.Count < level)
                 {
-                    Add(FlowSequence.InvalidSequence());
+                    Add(FlowSequence.invalidSequence);
                 }
 
                 var sequence = FlowSequence.Sequence(nodeID);
@@ -980,15 +983,14 @@ namespace SharpLogix
 
             private bool SequenceAlreadyAvailable(int level)
             {
-                return (this.Count > level && this[level] != null);
+                return (this.Count > level && this[level] != FlowSequence.invalidSequence);
             }
             
             public void StartUsing(int level)
             {
                 if (!SequenceAlreadyAvailable(level))
                 {
-                    Console.WriteLine($"No sequence currently defined for level {level}");
-                    return;
+                    throw new Exception($"No sequence defined for level {level}");
                 }
 
                 AtLevel(level).StartUsing();
@@ -1012,11 +1014,6 @@ namespace SharpLogix
 
         }
 
-        struct Checkpoint
-        {
-            public int registerNodeID;
-        }
-
         class LevelCheckpoint
         {
             public int previousImpulseNodeID;
@@ -1034,7 +1031,7 @@ namespace SharpLogix
 
             public LevelCheckpoint PrepareAt(int level, int impulseNodeID, string impulseOutputName)
             {
-                while (this.Count < level)
+                while (level >= this.Count)
                 {
                     Add(new LevelCheckpoint());
                 }
@@ -1045,7 +1042,7 @@ namespace SharpLogix
                     previousImpulseNodeOutputName = impulseOutputName
                 };
 
-                Add(checkPointStart);
+                this[level] = checkPointStart;
 
                 return checkPointStart;
             }
@@ -1058,14 +1055,14 @@ namespace SharpLogix
 
         }
 
-        private void LocalCheckpointPrepare()
+        private void CheckpointZonePrepare()
         {
             var sequence = flowSequences.AtLevel(currentBlockLevel);
 
             checkpointsZones.PrepareAt(
                 currentBlockLevel,
                 sequence.nodeID,
-                sequence.CurrentOutput());
+                sequence.Output(0));
         }
 
         /* TODO : When preparing a sequence, 
@@ -1128,21 +1125,28 @@ namespace SharpLogix
             LocalsWriteBackUpdatedBefore(currentBlockLevel);
         }
 
+        int branchingLevel = 0;
+
         public void StartBranching()
         {
             flowSequences.DefineFor(currentBlockLevel, AddSequenceImpulse());
             flowSequences.StartUsing(currentBlockLevel);
+            CheckpointZonePrepare();
+            branchingLevel++;
+
         }
 
         public void StopBranching()
         {
             flowSequences.StopUsing(currentBlockLevel);
+            branchingLevel--;
         }
+
+
 
         public bool Branching()
         {
-            var sequence = flowSequences.AtLevel(currentBlockLevel);
-            return sequence != null && sequence.users > 0;
+            return branchingLevel > 0;
         }
 
         private void AppendParameters(LogixLocalVariables newBlockVariables)
@@ -1170,9 +1174,9 @@ namespace SharpLogix
             var newBlockVariables = LocalsPush();
             AppendParameters(newBlockVariables);
             base.VisitBlock(node);
+            SaveLocalsModifiedInBranches();
             LocalsPop();
 
-            SaveLocalsModifiedInBranches();
 
         }
 
@@ -1180,10 +1184,13 @@ namespace SharpLogix
         {
             string identifierName = node.Identifier.ToString();
             /* FIXME : Search in every variable category */
-            var localVar = LocalsGetVariable(identifierName);
-            if (LocalVariableValid(localVar))
+            
+            var localsWithVar = LocalsContainingIdentifier(identifierName);
+
+            if (localsWithVar != null)
             {
-                AddToCurrentOperation(localVar.lastNodeID);
+                var localVariable = localsWithVar[identifierName];
+                AddToCurrentOperation(localVariable.lastNodeID);
             }
             base.VisitIdentifierName(node);
         }
@@ -1266,7 +1273,7 @@ namespace SharpLogix
                     "Param : " + paramName, methodSlot);
 
                 /* FIXME Only keep one variable */
-                methodParameters.AddVariable(paramName, nodeID);
+                methodParameters.AddVariable(methodParam.Type.ToString(), paramName, nodeID);
                 logixMethod.AddParameter(paramName, methodParamType, nodeID);
             }
 
@@ -1294,7 +1301,7 @@ namespace SharpLogix
 
             ImpulseNext(methodRunImpulse, "Impulse");
 
-            base.VisitBlock(node.Body);
+            VisitBlock(node.Body);
             //base.VisitMethodDeclaration(node);
         }
 
@@ -1311,25 +1318,28 @@ namespace SharpLogix
             
         }
 
+        public override void VisitVariableDeclaration(VariableDeclarationSyntax node)
+        {
+            foreach (var variable in node.Variables)
+            {
+                LocalAdd(node.Type.ToString(), variable.Identifier.ToString(), -1);
+            }
+            base.VisitVariableDeclaration(node);
+        }
+
         public override void VisitVariableDeclarator(VariableDeclaratorSyntax node)
         {
-            Console.WriteLine($"Declaring a new variable named : {node.Identifier}");
-            string varName = node.Identifier.ToString();
-
-            LocalAdd(varName, -1);
             /* Undefined variable... We'll catch up at the definition */
             if (node.Initializer == null) return;
+
+            string varName = node.Identifier.ToString();
 
             CollectionPush();
             base.VisitVariableDeclarator(node);
             OperationNodes logixNodes = CollectionPop();
 
             int nodeID = logixNodes[logixNodes.Count - 1];
-            /* FIXME LocalS or Local ? Choose one */
-            LocalsSetVar(varName, nodeID);
-            Console.WriteLine($"VAR {node.Identifier} {nodeID}");
-
-
+            LocalsSetVar(varName, nodeID); /* FIXME LocalS or Local ? Choose one */
         }
 
 
@@ -1518,7 +1528,7 @@ namespace SharpLogix
             }
             Console.WriteLine($"IF CONDITION : {node.Condition} THEN : {node.Statement} ELSE : {node.Else}");
 
-            SequenceNext();
+            //SequenceNext();
             //base.VisitIfStatement(node);
             StopBranching();
         }
@@ -1649,13 +1659,6 @@ namespace SharpLogix
             }
         }
 
-
-        public override void VisitExpressionStatement(ExpressionStatementSyntax node)
-        {
-            
-            //node.IsKind()
-            base.VisitExpressionStatement(node);
-        }
     }
 
 
