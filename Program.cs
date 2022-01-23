@@ -850,35 +850,27 @@ namespace SharpLogix
         {
 
             int sequencerID = AddNode("ProgramFlow.SequenceImpulse", "Branching");
-            /* I purposedly do not encode the end bracket in the
-             * sequence, since this just add extra parsing
-             * for no reasons.
-             * This might be replaced by a comma, to avoid triggering
-             * people OCD (and make parsing easier)
-             */
 
-            /* We always leave the first output (0) for the checkpoints */
-            ConnectLastImpulse(sequencerID, "Trigger", "Sequence[1");
 
             return sequencerID;
         }
-
-
 
         public void SequenceStop()
         {
             currentSequenceID = -1;
         }
 
-        public int WriteTo(int registerNodeID, int fromValueID)
+        public int WriteTo(int registerNodeID, string registerType, int fromValueID)
         {
-            return WriteTo(registerNodeID, fromValueID, GetDefaultOutput(fromValueID));
+            return WriteTo(registerNodeID, registerType, fromValueID, GetDefaultOutput(fromValueID));
         }
 
-        public int WriteTo(int registerNodeID, int fromValueID, string fromOutput)
+        public int WriteTo(int registerNodeID, string registerType, int fromValueID, string fromOutput)
         {
-            int writeNodeID = AddNode("Action.WriteValueNode", "Register write");
-            Emit($"WRITE {registerNodeID} {fromValueID} {fromOutput}");
+            /* FIXME : Get the typename from the register node */
+            int writeNodeID = AddNode($"Actions.WriteValueNode<{typesList[registerType]}>", "Register write");
+            Connect(writeNodeID, "Value", fromValueID);
+            Emit($"WRITE {registerNodeID} {writeNodeID}");
             
             return writeNodeID;
         }
@@ -1078,7 +1070,7 @@ namespace SharpLogix
              */
             int registerID = RegisterCreateFor(localVariable);
 
-            int writeID = WriteTo(registerID, checkpointFromID);
+            int writeID = WriteTo(registerID, localVariable.typeName, checkpointFromID);
             var checkpoint = checkpointsZones.AtLevel(localVariable.definitionLevel);
             ConnectImpulse(
                 writeID, "Write",
@@ -1098,7 +1090,7 @@ namespace SharpLogix
                 LocalCheckpointCreate(variable);
             }
 
-            var writeID = WriteTo(variable.checkPointID, variable.lastNodeID);
+            var writeID = WriteTo(variable.checkPointID, variable.typeName, variable.lastNodeID);
             ConnectLastImpulse(writeID, "Write", "OnDone");
             variable.lastNodeID = variable.checkPointID;
         }
@@ -1129,7 +1121,17 @@ namespace SharpLogix
 
         public void StartBranching()
         {
-            flowSequences.DefineFor(currentBlockLevel, AddSequenceImpulse());
+            var flowSequence = flowSequences.DefineFor(currentBlockLevel, AddSequenceImpulse());
+            /* FIXME
+             * The sequence management is anarchic.
+             * Sometimes it's managed through methods
+             * Sometimes it's managed through direct output definition
+             * Always use functions, as best as possible.
+             */
+
+            /* We always leave the first output (0) for the checkpoints */
+            ConnectLastImpulse(flowSequence.nodeID, "Trigger", flowSequence.NextOutput());
+
             flowSequences.StartUsing(currentBlockLevel);
             CheckpointZonePrepare();
             branchingLevel++;
@@ -1138,11 +1140,12 @@ namespace SharpLogix
 
         public void StopBranching()
         {
+            var sequence = flowSequences[currentBlockLevel];
+            ImpulseNext(sequence.nodeID, sequence.NextOutput());
             flowSequences.StopUsing(currentBlockLevel);
             branchingLevel--;
+            
         }
-
-
 
         public bool Branching()
         {
@@ -1268,6 +1271,7 @@ namespace SharpLogix
                 var methodParam = parameters[i];
                 string methodParamType = methodParam.Type.ToString();
                 string paramName = methodParam.Identifier.ToString();
+                VariableDefine(paramName, methodParamType, methodSlot);
                 int nodeID = NodeDynamicVariableRead(
                     methodParamType, paramName,
                     "Param : " + paramName, methodSlot);
@@ -1292,6 +1296,7 @@ namespace SharpLogix
             bool hasReturn = (returnType != "void");
             if (hasReturn)
             {
+                VariableDefine("return", returnType, methodSlot);
                 currentReturnID = NodeDynamicVariableWrite(returnType, "return", $"{methodName} Return", methodSlot);
             }
             else
@@ -1303,6 +1308,7 @@ namespace SharpLogix
 
             VisitBlock(node.Body);
             //base.VisitMethodDeclaration(node);
+
         }
 
         public override void VisitReturnStatement(ReturnStatementSyntax node)
@@ -1491,12 +1497,6 @@ namespace SharpLogix
 
         public override void VisitIfStatement(IfStatementSyntax node)
         {
-            /* TODO
-             * - Add a Sequence
-             * - Flow from the Sequence after the If statement
-             * This requires support for Inputs lists, so this will
-             * require some tests on the plugin side...
-             */
 
             StartBranching();
 
@@ -1531,8 +1531,15 @@ namespace SharpLogix
             //SequenceNext();
             //base.VisitIfStatement(node);
             StopBranching();
+
         }
-        public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
+
+        void VariableDefine(string varName, string varType, int slotID)
+        {
+            Emit($"VAR S{slotID} \"{Base64Encode(varName)}\" '{LogixClassName(varType)}' ");
+        }
+
+public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
         {
             Console.WriteLine($"Assigning to {node.Left} {node.Left.Kind()} with {node.Kind()} {node.OperatorToken} and {node.Right.GetType()}");
             if (node.Left.Kind() != SyntaxKind.IdentifierName)
