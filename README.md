@@ -4,7 +4,7 @@ https://user-images.githubusercontent.com/84687350/147426602-d9b5d906-4318-4b63-
 
 An attempt at converting C# to Logix
 
-![The generated script is sent manually](https://raw.githubusercontent.com/vr-voyage/SharpLogix/main/screenshots/First-working-manual-attempt.png)
+![The generated script is sent manually](https://raw.githubusercontent.com/vr-voyage/SharpLogix/main/screenshots/Variables-WriteBack-FirstWorkingExample.png)
 
 A special branch of my NeosVR Plugin is required :
 https://github.com/vr-voyage/voyage-neosvr-plugin/tree/SharpLogix
@@ -24,11 +24,11 @@ small script, with user function definition and calling.
 If you display (unpack) the result, it's a mess, however,
 it works and provide the expected results.
 
-Still, no program flow beside that (no if/else for/while,
-...). Also no arithmetic, beside floating point arithmetic,
-until I figure out how to provoke the auto cast on the
-Logix side (it's able to do it in-game, but through
-special mechanisms).
+* Basic float arithmetic
+* Basic if/else flows
+* User defined functions, parameters and return
+
+It's still far for being useable, though...
 
 # Next steps
 
@@ -37,7 +37,8 @@ special mechanisms).
   copy-pasted. Add the WebSocket server to it.
 - [ ] 
   Handle basic flow control mechanisms
-  (if/else and for loops)
+  (if/else and for loops)  
+  **IN PROGRESS**
 - [ ] 
   Autocasting for arithmetics. So that "1 + 1" use
   Add_Int and "1.0 + 1.0" use Add_Float.  Also, that
